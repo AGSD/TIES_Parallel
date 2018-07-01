@@ -19,8 +19,6 @@
 #define NUM_THREADS 8
 //Number of additions in a sampling thread, after which we make an update to the total
 #define UPDATE_COUNTER 20
-//Toggle Debugging output
-#define dbg(x)
 
 using namespace std;
 
@@ -98,8 +96,6 @@ pair<edge*,long> sampleGraph(vector<edge> &edgeList, double fi, long n){
 	long m = edgeList.size();					//number of edges in original graph
 	bool *vExist = new bool[n+1]();					//set to true for each vertex which is sampled
 
-	dbg(printf("required size = %ld\n",requiredVsize);)
-
     	long totalNodes=0;					//Number of sampled vertices
 	vector<long> tmpNodes[NUM_THREADS];		//individual vectors for each thread
 	long *tmpNodeSizes = new long[NUM_THREADS]();	//Number of sampled vertices by each thread
@@ -127,10 +123,6 @@ pair<edge*,long> sampleGraph(vector<edge> &edgeList, double fi, long n){
    	for(long i=1; i<NUM_THREADS; ++i)
    		tmpNodeStart[i] = tmpNodeSizes[i-1];
    	tmpNodeStart[0] = 0;
-   	
-   	dbg(printf("tmpNodeStartValues and sizes\n");
-   	for(long i=0; i<NUM_THREADS; ++i)
-   		printf("%ld %ld\n",tmpNodeStart[i],tmpNodes[i].size());)
    	
    	//Copy values to Vs in parallel from all vectors
    	#pragma omp parallel shared(Vs, tmpNodes, tmpNodeSizes)
@@ -173,10 +165,6 @@ pair<edge*,long> sampleGraph(vector<edge> &edgeList, double fi, long n){
    	for(long i=1; i<NUM_THREADS; ++i)
    		tmpEdgeStart[i] = tmpEdgeSizes[i-1];
    	tmpEdgeStart[0] = 0;
-   	
-   	dbg(printf("tmpEdgeStartValues and sizes\n");
-   	for(long i=0; i<NUM_THREADS; ++i)
-   		printf("%ld %ld\n",tmpEdgeStart[i],tmpEdges[i].size());)
 	 
     	//Copy values to Es in parallel from all vectors
    	#pragma omp parallel shared(Es, tmpEdges, tmpEdgeSizes)
@@ -185,7 +173,7 @@ pair<edge*,long> sampleGraph(vector<edge> &edgeList, double fi, long n){
    		for(long i=0; i<NUM_THREADS; ++i){
    			long start = tmpEdgeStart[i];
    			long end = start+tmpEdges[i].size();
-   			dbg(printf("%ld %ld\n",start,end);)
+
    			for(long j=start; j<end; ++j)
    				Es[j] = tmpEdges[i][j-start];
    		}
@@ -194,7 +182,7 @@ pair<edge*,long> sampleGraph(vector<edge> &edgeList, double fi, long n){
 	vbs(cout<<"Induced edges, final count is "<<VsSize<<" vertices, and "<<EsSize<<" edges"<<endl;)
     
     	//releasing memory before exiting function
-    	delete vExist, tmpNodeSizes, tmpNodeStart, Vs, tmpEdgeSize, tmpEdgeStart;
+    	delete vExist, tmpNodeSizes, tmpNodeStart, Vs, tmpEdgeSizes, tmpEdgeStart;
     
 	return pair<edge*,long>(Es,EsSize);
 }
@@ -223,10 +211,6 @@ long inputGraph(string filename, vector<edge> &el){ //creates the edge list in t
     }
     in.close();
     
-    dbg(printf("Last 2 elements in inputVector\n");
-    long s = el.size();
-    printf("%ld %ld\n%ld %ld\n",el[s-1].u,el[s-1].v,el[s-2].u,el[s-2].v);)
-    
     return maxNode;
 }
 
@@ -252,17 +236,6 @@ void make_csr(vector<edge> el, long n, long m){
         g.vi[i] += 1;
     g.vi[0] = 0;
     g.vi[n+1] = m+1;
-    
-    dbg(printf("Printing CSR\n");
-    for(i=0; i<n; ++i){
-		long start = g.vi[i];
-		long stop  = g.vi[i+1];
-		printf("For node %ld: start=%ld stop=%ld\n",i,start,stop);
-		for(long j=start; j<stop; ++j){
-			printf("%ld ",g.ei[j]);
-		}
-		printf("\n\n");
-    })
 }
 
 vector<long> sampleEdges(vector<edge> &el, bool* vExist, long m, long pnum, long psize){
@@ -299,7 +272,6 @@ vector<long> sampleEdges(vector<edge> &el, bool* vExist, long m, long pnum, long
         if(counter >= UPDATE_COUNTER){
         	currentOld = __sync_fetch_and_add(&currentVsize,counter);
         	if(currentOld+counter > requiredVsize){
-        		dbg(printf("killing thread %ld, with Vtmp size %ld\n",currentOld,Vtmp.size());)
         		break;
         	}
         	counter = 0;
@@ -336,7 +308,6 @@ vector<edge> induceEdges(long *Vs, graph &g, bool* vExist, long VsSize, long pnu
 void writeGraph(string filename,edge *Es, long EsSize){
     ofstream out(filename,ofstream::out);
     long i;
-    dbg(printf("EsSize at end = %ld\n",EsSize);)
     for(i=0; i<EsSize; ++i){
         out<<Es[i].u<<" "<<Es[i].v<<'\n';
     }
