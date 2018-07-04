@@ -6,6 +6,7 @@
 */
 #include<iostream>
 #include<fstream>
+#include<omp.h>
 #include<vector>
 #include<random>
 #include<string>
@@ -14,7 +15,7 @@
 #include<utility>
 
 //Toggle for verbose comments
-#define vbs(x) x
+#define vbs(x)
 //Number of threads to use
 #define NUM_THREADS 8
 //Number of additions in a sampling thread, after which we make an update to the total
@@ -40,16 +41,16 @@ struct graph{
 	long *ei;
 };
 
-long currentVsize=0;		//currently number of sampled nodes
+long currentVsize=0;	//currently number of sampled nodes
 long requiredVsize;		//Required subsample size(number of vertices)
-graph g;			//csr version of graph
+graph g;				//csr version of graph
 
-long inputGraph(string, vector<edge>&);					//extract graph from input file
-void make_csr(vector<edge>,long,long);					//convert graph to compressed sparse row format
-pair<edge*,long> sampleGraph(vector<edge>&, double, long);		//sample original graph
+long inputGraph(string, vector<edge>&);								//extract graph from input file
+void make_csr(vector<edge>,long,long);								//convert graph to compressed sparse row format
+pair<edge*,long> sampleGraph(vector<edge>&, double, long);			//sample original graph
 vector<long> sampleEdges(vector<edge>&, bool*, long, long, long);	//sample edges within a thread
 vector<edge> induceEdges(long*, graph&, bool*, long, long, long);	//induce edges within a thread
-void writeGraph(string,edge*, long);					//write output graph to a file 
+void writeGraph(string,edge*, long);								//write output graph to a file 
 void parseCommandlineArgs(int,char* [], string&, string&, double&);	//parse input parameters from command line
 
 int main(int argc, char* argv[]) {
@@ -61,29 +62,41 @@ int main(int argc, char* argv[]) {
     
     //Working variables
     vector<edge> inputEdgeList;	//extracted list of edges from input file
-    edge *sampledEdgeList;	//sampled output list of edges from sampling the graph
-    long sampledSize;		//holds size of sampled subgraph
-    long n,m;			//number of vertices and edges in original graph
+    edge *sampledEdgeList;		//sampled output list of edges from sampling the graph
+    long sampledSize;			//holds size of sampled subgraph
+    long n,m;					//number of vertices and edges in original graph
     pair<edge*,long> sampled;	//holds return edge list and list size
+    
+    //Timekeeping
+    double start,stop;
     
     parseCommandlineArgs(argc, argv, inFilename, outFilename, fi);	//read input file name, ouput file name and value of fi(sampling ratio)
 
-    vbs(cout<<"Getting input"<<endl;)
+    vbs(printf("Getting input\n");)
 
     n = inputGraph(inFilename,inputEdgeList);	//read edge list from input file, returns number of vertices
-    m = inputEdgeList.size();			//number of edges in original graph
+    m = inputEdgeList.size();					//number of edges in original graph
     
-    vbs(cout<<"Input succeeded, graph has "<<n<<" vertices and "<<m<<" edges"<<endl;)
+    vbs(printf("Input succeeded, graph has %ld vertices and %ld edges\n",n,m);)
 
-    make_csr(inputEdgeList, n, m);		//convert graph to csr format(helps in induction)
+    make_csr(inputEdgeList, n, m);				//convert graph to csr format(helps in induction)
 	
+	//Timed function starting
+    start = omp_get_wtime();
     sampled = sampleGraph(inputEdgeList,fi,n);	//sample the graph using fi
+    stop = omp_get_wtime();
+    //Timed function ending
+    
     sampledEdgeList = sampled.first;
     sampledSize = sampled.second;
     
     writeGraph(outFilename, sampledEdgeList, sampledSize);	//write sampled graph to file
+    delete sampledEdgeList;						//free up memory after the graph is written
 
-    vbs(cout<<"Output graph written to "<<outFilename<<endl;)
+    vbs(printf("Output graph written to %s\n",outFilename.c_str());)
+    
+    printf("Time taken in sampling: %lf milliseconds, with %d threads\n",(stop-start)*1000,NUM_THREADS);
+    
     return 0;
 }
 
@@ -94,28 +107,28 @@ pair<edge*,long> sampleGraph(vector<edge> &edgeList, double fi, long n){
 	requiredVsize = fi*n;
 	
 	long m = edgeList.size();					//number of edges in original graph
-	bool *vExist = new bool[n+1]();					//set to true for each vertex which is sampled
+	bool *vExist = new bool[n+1]();				//set to true for each vertex which is sampled
 
-    	long totalNodes=0;					//Number of sampled vertices
-	vector<long> tmpNodes[NUM_THREADS];		//individual vectors for each thread
+    long totalNodes=0;								//Number of sampled vertices
+	vector<long> tmpNodes[NUM_THREADS];				//individual vectors for each thread
 	long *tmpNodeSizes = new long[NUM_THREADS]();	//Number of sampled vertices by each thread
 	long *tmpNodeStart = new long[NUM_THREADS]();	//Starting index for copying vertices from each thread
-	long psize = (m+NUM_THREADS-1)/NUM_THREADS;	//partition size for each thread sampling edges
+	long psize = (m+NUM_THREADS-1)/NUM_THREADS;		//partition size for each thread sampling edges
 	
 	//Sample edges in parallel
-    	#pragma omp parallel shared(edgeList, vExist, n, m, fi, psize, tmpNodes, tmpNodeSizes) num_threads(NUM_THREADS)
-    	{
-    		#pragma omp for
-    		for(long i=0; i<NUM_THREADS; ++i) {
-    			tmpNodes[i] = sampleEdges(edgeList, vExist, m, i, psize);
-			long size = tmpNodes[i].size();
-			tmpNodeSizes[i] = size;
-			__sync_fetch_and_add(&totalNodes,size);
-    		}
-    	}
-   
-    	const long VsSize = totalNodes;			//Size of Vs
-    	long *Vs = new long[VsSize]();			//Array of sampled vertices
+	#pragma omp parallel shared(edgeList, vExist, n, m, fi, psize, tmpNodes, tmpNodeSizes) num_threads(NUM_THREADS)
+	{
+		#pragma omp for
+		for(long i=0; i<NUM_THREADS; ++i) {
+			tmpNodes[i] = sampleEdges(edgeList, vExist, m, i, psize);
+		long size = tmpNodes[i].size();
+		tmpNodeSizes[i] = size;
+		__sync_fetch_and_add(&totalNodes,size);
+		}
+	}
+
+	const long VsSize = totalNodes;			//Size of Vs
+	long *Vs = new long[VsSize]();			//Array of sampled vertices
    	
    	//Calculating starting point for copying different vectors to Vs
    	for(long i=1; i<NUM_THREADS; ++i)
@@ -136,25 +149,25 @@ pair<edge*,long> sampleGraph(vector<edge> &edgeList, double fi, long n){
    		}
    	}
    	
-    	vbs(cout<<"Sampled edges, number of vertices="<<VsSize<<endl;)
+    vbs(cout<<"Sampled edges, number of vertices="<<VsSize<<endl;)
 		
-	long totalEdges=0;				//number of edges induced
-	vector<edge> tmpEdges[NUM_THREADS];		//vector for each thread inducing edges
+	long totalEdges=0;								//number of edges induced
+	vector<edge> tmpEdges[NUM_THREADS];				//vector for each thread inducing edges
 	long *tmpEdgeSizes = new long[NUM_THREADS]();	//Number of induced edges for each thread
 	long *tmpEdgeStart = new long[NUM_THREADS]();	//Starting index for copying edges from each thread
-	psize = (VsSize+NUM_THREADS-1)/NUM_THREADS;	//partition size for each thread inducing edges
+	psize = (VsSize+NUM_THREADS-1)/NUM_THREADS;		//partition size for each thread inducing edges
 	
 	//Induce edges in parallel
-    	#pragma omp parallel shared(tmpEdges,tmpEdgeSizes,Vs,g,vExist,n,m,psize)
-    	{
-    		#pragma omp for
-    		for(long i=0; i<NUM_THREADS; ++i){
-    			tmpEdges[i] = induceEdges(Vs, g, vExist, VsSize, i, psize);
-    			long size = tmpEdges[i].size();
-			tmpEdgeSizes[i] = size;
-			__sync_fetch_and_add(&totalEdges,size);
-    		}
-    	}
+	#pragma omp parallel shared(tmpEdges,tmpEdgeSizes,Vs,g,vExist,n,m,psize)
+	{
+		#pragma omp for
+		for(long i=0; i<NUM_THREADS; ++i){
+			tmpEdges[i] = induceEdges(Vs, g, vExist, VsSize, i, psize);
+			long size = tmpEdges[i].size();
+		tmpEdgeSizes[i] = size;
+		__sync_fetch_and_add(&totalEdges,size);
+		}
+	}
     
 	const long EsSize = totalEdges;			//Size of Es
 	edge *Es = new edge[totalEdges];		//Array of induced edges
@@ -166,14 +179,13 @@ pair<edge*,long> sampleGraph(vector<edge> &edgeList, double fi, long n){
    		tmpEdgeStart[i] = tmpEdgeSizes[i-1];
    	tmpEdgeStart[0] = 0;
 	 
-    	//Copy values to Es in parallel from all vectors
+    //Copy values to Es in parallel from all vectors
    	#pragma omp parallel shared(Es, tmpEdges, tmpEdgeSizes)
    	{
    		#pragma omp for
    		for(long i=0; i<NUM_THREADS; ++i){
    			long start = tmpEdgeStart[i];
    			long end = start+tmpEdges[i].size();
-
    			for(long j=start; j<end; ++j)
    				Es[j] = tmpEdges[i][j-start];
    		}
@@ -181,15 +193,15 @@ pair<edge*,long> sampleGraph(vector<edge> &edgeList, double fi, long n){
    	    
 	vbs(cout<<"Induced edges, final count is "<<VsSize<<" vertices, and "<<EsSize<<" edges"<<endl;)
     
-    	//releasing memory before exiting function
-    	delete vExist, tmpNodeSizes, tmpNodeStart, Vs, tmpEdgeSizes, tmpEdgeStart;
+	//releasing memory before exiting function
+	delete vExist, tmpNodeSizes, tmpNodeStart, Vs, tmpEdgeSizes, tmpEdgeStart;
     
 	return pair<edge*,long>(Es,EsSize);
 }
 
 void parseCommandlineArgs(int argc, char* argv[], string &in, string &out, double &fi){
     if(argc != 4){
-        cout<<"Usage: ties_sequential inputFilename outputFilename samplingRatio [-u (flag for undirected graph)]";
+        cout<<"Usage: ties_sequential inputFilename outputFilename samplingRatio";
         exit(1);
     }
     in = argv[1];
@@ -200,8 +212,7 @@ void parseCommandlineArgs(int argc, char* argv[], string &in, string &out, doubl
 long inputGraph(string filename, vector<edge> &el){ //creates the edge list in the passed vector, and returns the number of nodes(maximum node found in any edge)
 
     ifstream in(filename, ifstream::in);
-    string line;
-    long a,b; //input nodes for the edge
+    long a,b; 		//input nodes for the edge
     long maxNode = 0;
     long currentMax;
 
